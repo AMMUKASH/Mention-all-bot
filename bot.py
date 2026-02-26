@@ -1,11 +1,8 @@
 import asyncio
 import os
-import sys
 from threading import Thread
-
 from pyrogram import Client, filters, enums, idle
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from flask import Flask
 from pymongo import MongoClient
 
@@ -21,7 +18,7 @@ try:
     mongo = MongoClient(MONGO_URL)
     db = mongo.MentionBot
     users_db = db.users
-    print("✅ MongoDB Connected Successfully!")
+    print("✅ MongoDB Connected!")
 except Exception as e:
     print(f"❌ Mongo ERROR: {e}")
 
@@ -33,7 +30,7 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-# -------- WEB SERVER FOR RENDER ---------
+# -------- WEB SERVER (For Render Keep-Alive) ---------
 web = Flask(__name__)
 
 @web.route('/')
@@ -41,6 +38,7 @@ def home():
     return "Bot is running!"
 
 def run_web():
+    # Render automatically sets the PORT environment variable
     port = int(os.environ.get("PORT", 8080))
     web.run(host="0.0.0.0", port=port)
 
@@ -54,22 +52,21 @@ START_BUTTONS = InlineKeyboardMarkup([
     ]
 ])
 
-# -------- COMMANDS & HANDLERS ---------
+# -------- COMMANDS ---------
 @app.on_message(filters.command("start") & filters.private)
 async def start_cmd(client, message):
     try:
         if not users_db.find_one({"user_id": message.from_user.id}):
             users_db.insert_one({"user_id": message.from_user.id})
-    except:
-        pass
-    await message.reply_photo(photo=START_IMG, caption="✨ **Welcome To Mention Tag Bot** ✨", reply_markup=START_BUTTONS)
+    except: pass
+    await message.reply_photo(photo=START_IMG, caption="✨ **Welcome To Mention Tag Bot**", reply_markup=START_BUTTONS)
 
 @app.on_callback_query()
 async def cb_handler(client, query: CallbackQuery):
     if query.data == "help_menu":
-        await query.message.edit_caption(caption="🛠 **HELP MENU**\n\n/all - Tag all members\n/cancel - Stop tagging", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅ BACK", callback_data="start_menu")]]))
+        await query.message.edit_caption(caption="🛠 **HELP MENU**\n\n/all - Tag all\n/cancel - Stop", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅ BACK", callback_data="start_menu")]]))
     elif query.data == "start_menu":
-        await query.message.edit_caption(caption="✨ **Welcome Back** ✨", reply_markup=START_BUTTONS)
+        await query.message.edit_caption(caption="✨ **Welcome Back**", reply_markup=START_BUTTONS)
 
 # -------- TAGGING SYSTEM ---------
 IS_STOPPED = {}
@@ -80,7 +77,7 @@ async def tag_all(client, message):
     try:
         user = await client.get_chat_member(chat_id, message.from_user.id)
         if user.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
-            return await message.reply_text("❌ Only admins can use this!")
+            return await message.reply_text("❌ Admins only!")
     except: return
 
     IS_STOPPED[chat_id] = False
@@ -92,30 +89,23 @@ async def tag_all(client, message):
     await message.reply_text(f"🚀 Tagging {len(mentions)} users...")
     for i in range(0, len(mentions), 5):
         if IS_STOPPED.get(chat_id): break
-        await client.send_message(chat_id, " ".join(mentions[i:i+5]))
-        await asyncio.sleep(2)
+        try:
+            await client.send_message(chat_id, " ".join(mentions[i:i+5]))
+            await asyncio.sleep(2)
+        except: break
 
 @app.on_message(filters.command("cancel") & filters.group)
 async def cancel_tag(client, message):
     IS_STOPPED[message.chat.id] = True
     await message.reply_text("🛑 Tagging Stopped.")
 
-# -------- MAIN EXECUTION ---------
-async def main():
-    # Start Flask in a separate thread
-    Thread(target=run_web, daemon=True).start()
-    
-    # Start the Pyrogram Client
-    await app.start()
-    print("🚀 Bot is Online!")
-    await idle()
-    await app.stop()
-
+# -------- STARTING POINT ---------
 if __name__ == "__main__":
-    try:
-        # Loop check for environments like Render/Docker
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(main())
-    except RuntimeError:
-        # Fallback if loop is already closed
-        asyncio.run(main())
+    # Start Web Server in background
+    t = Thread(target=run_web)
+    t.daemon = True
+    t.start()
+    
+    # Start Bot (This manages the event loop automatically)
+    print("🚀 Starting Bot...")
+    app.run() 
